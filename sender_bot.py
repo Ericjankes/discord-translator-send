@@ -62,6 +62,7 @@ async def send_translated(
     text: str,
     show_original: bool = False
 ):
+    # 优先设为公开发送
     await interaction.response.defer(ephemeral=False)
 
     try:
@@ -88,7 +89,16 @@ async def send_translated(
         else:
             final_message = translated_text
 
-        await interaction.followup.send(final_message)
+        # 尝试公开发送，若遇频道权限限制则自动降级为私密结果
+        try:
+            await interaction.followup.send(final_message)
+        except (discord.Forbidden, discord.HTTPException):
+            fallback_tip = (
+                f"⚠️ **当前频道未授权机器人公开展示消息**\n"
+                f"已为你生成【{target_lang.value}】译文（点击可快速复制）：\n"
+                f"```{translated_text}```"
+            )
+            await interaction.followup.send(fallback_tip, ephemeral=True)
 
     except Exception as e:
         await interaction.followup.send(f"❌ 发送失败：`{str(e)}`", ephemeral=True)
