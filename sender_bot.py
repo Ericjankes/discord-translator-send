@@ -38,12 +38,11 @@ async def start_dummy_web_server():
     await site.start()
     print(f"🌐 伪造 Web 服务已启动，端口: {port}")
 
-# ==================== 4. 注册 /send 发送指令 ====================
+# ==================== 4. 注册 /send 发送指令（自适应权限） ====================
 @tree.command(name="send", description="输入中文（含网络俚语），翻译为指定语言并发送")
 @app_commands.describe(
     target_lang="选择目标语种",
-    text="输入中文内容（支持游戏黑话、拼音缩写及网络梗）",
-    show_original="是否附带中文原文（默认不附带）"
+    text="输入中文内容（支持游戏黑话、拼音缩写及网络梗）"
 )
 @app_commands.choices(target_lang=[
     app_commands.Choice(name="🇻🇳 越南语 (Vietnamese)", value="越南语"),
@@ -59,12 +58,8 @@ async def start_dummy_web_server():
 async def send_translated(
     interaction: discord.Interaction, 
     target_lang: app_commands.Choice[str], 
-    text: str,
-    show_original: bool = False
+    text: str
 ):
-    # 优先设为公开发送
-    await interaction.response.defer(ephemeral=False)
-
     try:
         system_prompt = (
             f"你是一名精通中文互联网文化、游戏黑话及各国外语口语的同传专家。\n"
@@ -84,24 +79,20 @@ async def send_translated(
 
         translated_text = response.choices[0].message.content.strip()
 
-        if show_original:
-            final_message = f"{translated_text}\n*(原文: {text})*"
-        else:
-            final_message = translated_text
-
-        # 尝试公开发送，若遇频道权限限制则自动降级为私密结果
+        # 1. 尝试直接公开发送（在私聊、具备权限的群组中直接生效）
         try:
-            await interaction.followup.send(final_message)
+            await interaction.response.send_message(translated_text, ephemeral=False)
+        # 2. 若遇第三方频道无发信权限拦截，自动降级为私密卡片供快捷复制
         except (discord.Forbidden, discord.HTTPException):
             fallback_tip = (
-                f"⚠️ **当前频道未授权机器人公开展示消息**\n"
-                f"已为你生成【{target_lang.value}】译文（点击可快速复制）：\n"
+                f"⚠️ **当前频道未授权公开外发，已转为私密生成**（点击框内复制）：\n"
                 f"```{translated_text}```"
             )
-            await interaction.followup.send(fallback_tip, ephemeral=True)
+            await interaction.response.send_message(fallback_tip, ephemeral=True)
 
     except Exception as e:
-        await interaction.followup.send(f"❌ 发送失败：`{str(e)}`", ephemeral=True)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(f"❌ 翻译失败：`{str(e)}`", ephemeral=True)
 
 # ==================== 5. 启动事件 ====================
 @bot_client.event
