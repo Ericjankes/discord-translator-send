@@ -3,7 +3,7 @@ import asyncio
 from aiohttp import web
 import discord
 from discord import app_commands
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 # ==================== 1. 环境变量读取 ====================
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
@@ -13,8 +13,8 @@ if not DISCORD_BOT_TOKEN or not DEEPSEEK_API_KEY:
     print("❌ 错误：未找到 DISCORD_BOT_TOKEN 或 DEEPSEEK_API_KEY 环境变量！")
     exit(1)
 
-# ==================== 2. 初始化客户端 ====================
-ai_client = OpenAI(
+# ==================== 2. 初始化客户端（使用异步客户端避免阻塞） ====================
+ai_client = AsyncOpenAI(
     api_key=DEEPSEEK_API_KEY,
     base_url="https://api.deepseek.com"
 )
@@ -38,7 +38,7 @@ async def start_dummy_web_server():
     await site.start()
     print(f"🌐 伪造 Web 服务已启动，端口: {port}")
 
-# ==================== 4. 注册 /send 发送指令（自适应权限） ====================
+# ==================== 4. 注册 /send 发送指令 ====================
 @tree.command(name="send", description="输入中文（含网络俚语），翻译为指定语言并发送")
 @app_commands.describe(
     target_lang="选择目标语种",
@@ -60,6 +60,9 @@ async def send_translated(
     target_lang: app_commands.Choice[str], 
     text: str
 ):
+    # 【核心修复】：秒回 Discord 阻止 3 秒超时判定（设为私密回复，兼顾所有权限环境）
+    await interaction.response.defer(ephemeral=True)
+
     try:
         system_prompt = (
             f"你是一名精通中文互联网文化、游戏黑话及各国外语口语的同传专家。\n"
@@ -68,7 +71,8 @@ async def send_translated(
             f"【输出规范】：仅输出最终的【{target_lang.value}】译文，严禁包含任何中文解释、注音、括号说明或多余符号。"
         )
 
-        response = ai_client.chat.completions.create(
+        # 异步请求 DeepSeek，不卡死机器人进程
+        response = await ai_client.chat.completions.create(
             model="deepseek-v4-flash",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -79,20 +83,16 @@ async def send_translated(
 
         translated_text = response.choices[0].message.content.strip()
 
-        # 1. 尝试直接公开发送（在私聊、具备权限的群组中直接生效）
-        try:
-            await interaction.response.send_message(translated_text, ephemeral=False)
-        # 2. 若遇第三方频道无发信权限拦截，自动降级为私密卡片供快捷复制
-        except (discord.Forbidden, discord.HTTPException):
-            fallback_tip = (
-                f"⚠️ **当前频道未授权公开外发，已转为私密生成**（点击框内复制）：\n"
-                f"```{translated_text}```"
-            )
-            await interaction.response.send_message(fallback_tip, ephemeral=True)
+        # 生成点击即可一键复制的代码块卡片
+        reply_content = (
+            f"🌐 **【{target_lang.value}】译文**（点击框内一键复制）：\n"
+            f"```{translated_text}```\n"
+            f"*(原文: {text})*"
+        )
+        await interaction.followup.send(reply_content, ephemeral=True)
 
     except Exception as e:
-        if not interaction.response.is_done():
-            await interaction.response.send_message(f"❌ 翻译失败：`{str(e)}`", ephemeral=True)
+        await interaction.followup.send(f"❌ 翻译失败：`{str(e)}`", ephemeral=True)
 
 # ==================== 5. 启动事件 ====================
 @bot_client.event
